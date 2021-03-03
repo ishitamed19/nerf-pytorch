@@ -5,14 +5,14 @@ import os, imageio
 ########## Slightly modified version of LLFF data loading code 
 ##########  see https://github.com/Fyusion/LLFF for original
 
-def _minify(basedir, factors=[], resolutions=[]):
+def _minify(basedir, factors=[], resolutions=[], folder_type='images'):
     needtoload = False
     for r in factors:
-        imgdir = os.path.join(basedir, 'images_{}'.format(r))
+        imgdir = os.path.join(basedir, folder_type+'_{}'.format(r))
         if not os.path.exists(imgdir):
             needtoload = True
     for r in resolutions:
-        imgdir = os.path.join(basedir, 'images_{}x{}'.format(r[1], r[0]))
+        imgdir = os.path.join(basedir, folder_type+'_{}x{}'.format(r[1], r[0]))
         if not os.path.exists(imgdir):
             needtoload = True
     if not needtoload:
@@ -21,7 +21,7 @@ def _minify(basedir, factors=[], resolutions=[]):
     from shutil import copy
     from subprocess import check_output
     
-    imgdir = os.path.join(basedir, 'images')
+    imgdir = os.path.join(basedir, folder_type)
     imgs = [os.path.join(imgdir, f) for f in sorted(os.listdir(imgdir))]
     imgs = [f for f in imgs if any([f.endswith(ex) for ex in ['JPG', 'jpg', 'png', 'jpeg', 'PNG']])]
     imgdir_orig = imgdir
@@ -30,10 +30,10 @@ def _minify(basedir, factors=[], resolutions=[]):
 
     for r in factors + resolutions:
         if isinstance(r, int):
-            name = 'images_{}'.format(r)
+            name = folder_type+'_{}'.format(r)
             resizearg = '{}%'.format(100./r)
         else:
-            name = 'images_{}x{}'.format(r[1], r[0])
+            name = folder_type+'_{}x{}'.format(r[1], r[0])
             resizearg = '{}x{}'.format(r[1], r[0])
         imgdir = os.path.join(basedir, name)
         if os.path.exists(imgdir):
@@ -67,13 +67,17 @@ def _load_data(basedir, factor=None, width=None, height=None, load_imgs=True):
     
     img0 = [os.path.join(basedir, 'images', f) for f in sorted(os.listdir(os.path.join(basedir, 'images'))) \
             if f.endswith('JPG') or f.endswith('jpg') or f.endswith('png')][0]
+    depth0 = [os.path.join(basedir, 'depth', f) for f in sorted(os.listdir(os.path.join(basedir, 'depth'))) \
+            if f.endswith('JPG') or f.endswith('jpg') or f.endswith('png')][0]
     sh = imageio.imread(img0).shape
+    sh_depth = imageio.imread(depth0).shape
     
     sfx = ''
     
     if factor is not None:
         sfx = '_{}'.format(factor)
-        _minify(basedir, factors=[factor])
+        _minify(basedir, factors=[factor], folder_type='images')
+        _minify(basedir, factors=[factor], folder_type='depth')
         factor = factor
     elif height is not None:
         factor = sh[0] / float(height)
@@ -92,11 +96,21 @@ def _load_data(basedir, factor=None, width=None, height=None, load_imgs=True):
     if not os.path.exists(imgdir):
         print( imgdir, 'does not exist, returning' )
         return
+
+    depthdir = os.path.join(basedir, 'depth' + sfx)
+    if not os.path.exists(depthdir):
+        print( depthdir, 'does not exist, returning' )
+        return
     
     imgfiles = [os.path.join(imgdir, f) for f in sorted(os.listdir(imgdir)) if f.endswith('JPG') or f.endswith('jpg') or f.endswith('png')]
     if poses.shape[-1] != len(imgfiles):
         print( 'Mismatch between imgs {} and poses {} !!!!'.format(len(imgfiles), poses.shape[-1]) )
         return
+
+    depthfiles = [os.path.join(depthdir, f) for f in sorted(os.listdir(depthdir)) if f.endswith('JPG') or f.endswith('jpg') or f.endswith('png')]
+    if poses.shape[-1] != len(depthfiles):
+        print( 'Mismatch between depths {} and poses {} !!!!'.format(len(depthfiles), poses.shape[-1]) )
+        returns
     
     sh = imageio.imread(imgfiles[0]).shape
     poses[:2, 4, :] = np.array(sh[:2]).reshape([2, 1])
@@ -112,10 +126,12 @@ def _load_data(basedir, factor=None, width=None, height=None, load_imgs=True):
             return imageio.imread(f)
         
     imgs = imgs = [imread(f)[...,:3]/255. for f in imgfiles]
-    imgs = np.stack(imgs, -1)  
+    imgs = np.stack(imgs, -1)
+    dpths = dpths = [imread(f) for f in depthfiles]
+    dpths = np.stack(dpths, -1)  
     
-    print('Loaded image data', imgs.shape, poses[:,-1,0])
-    return poses, bds, imgs
+    print('Loaded image data', imgs.shape, poses[:,-1,0], dpths.shape)
+    return poses, bds, imgs, dpths
 
     
             
@@ -243,14 +259,17 @@ def spherify_poses(poses, bds):
 def load_llff_data(basedir, factor=8, recenter=True, bd_factor=.75, spherify=False, path_zflat=False):
     
 
-    poses, bds, imgs = _load_data(basedir, factor=factor) # factor=8 downsamples original imgs by 8x
+    poses, bds, imgs, dpths = _load_data(basedir, factor=factor) # factor=8 downsamples original imgs by 8x
     print('Loaded', basedir, bds.min(), bds.max())
     
     # Correct rotation matrix ordering and move variable dim to axis 0
     poses = np.concatenate([poses[:, 1:2, :], -poses[:, 0:1, :], poses[:, 2:, :]], 1)
     poses = np.moveaxis(poses, -1, 0).astype(np.float32)
     imgs = np.moveaxis(imgs, -1, 0).astype(np.float32)
+    # dpths = np.expand_dims(dpths, axis=2)
+    dpths = np.moveaxis(dpths, -1, 0).astype(np.float32)
     images = imgs
+    depths = dpths
     bds = np.moveaxis(bds, -1, 0).astype(np.float32)
     
     # Rescale if bd_factor is provided
@@ -304,7 +323,7 @@ def load_llff_data(basedir, factor=8, recenter=True, bd_factor=.75, spherify=Fal
 
     c2w = poses_avg(poses)
     print('Data:')
-    print(poses.shape, images.shape, bds.shape)
+    print(poses.shape, images.shape, bds.shape, depths.shape)
     
     dists = np.sum(np.square(c2w[:3,3] - poses[:,:3,3]), -1)
     i_test = np.argmin(dists)
@@ -312,8 +331,9 @@ def load_llff_data(basedir, factor=8, recenter=True, bd_factor=.75, spherify=Fal
     
     images = images.astype(np.float32)
     poses = poses.astype(np.float32)
+    depths = depths.astype(np.float32)
 
-    return images, poses, bds, render_poses, i_test
+    return images, poses, bds, render_poses, i_test, depths
 
 
 
