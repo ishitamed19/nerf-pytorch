@@ -18,6 +18,9 @@ from load_llff import load_llff_data
 from load_deepvoxels import load_dv_data
 from load_blender import load_blender_data
 
+import ipdb
+st = ipdb.set_trace
+
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 np.random.seed(0)
@@ -415,7 +418,7 @@ def render_rays(ray_batch,
 
     for k in ret:
         if (torch.isnan(ret[k]).any() or torch.isinf(ret[k]).any()) and DEBUG:
-            print(f"! [Numerical Error] {k} contains nan or inf.")
+            print("! [Numerical Error] {} contains nan or inf.".format(k))
 
     return ret
 
@@ -540,7 +543,8 @@ def train():
 
     # Multi-GPU
     args.n_gpus = torch.cuda.device_count()
-    print(f"Using {args.n_gpus} GPU(s).")
+    print("Using {} GPU(s).".format(args.n_gpus))
+
 
     # Load data
     if args.dataset_type == 'llff':
@@ -691,7 +695,7 @@ def train():
     print('VAL views are', i_val)
 
     # Summary writers
-    # writer = SummaryWriter(os.path.join(basedir, 'summaries', expname))
+    writer = SummaryWriter(os.path.join(basedir, 'summaries', expname))
     
     start = start + 1
     for i in trange(start, N_iters):
@@ -729,7 +733,7 @@ def train():
                             torch.linspace(W//2 - dW, W//2 + dW - 1, 2*dW)
                         ), -1)
                     if i == start:
-                        print(f"[Config] Center cropping of size {2*dH} x {2*dW} is enabled until iter {args.precrop_iters}")                
+                        print("[Config] Center cropping of size {} x {} is enabled until iter {}".format(2*dH, 2*dW, args.precrop_iters))                
                 else:
                     coords = torch.stack(torch.meshgrid(torch.linspace(0, H-1, H), torch.linspace(0, W-1, W)), -1)  # (H, W, 2)
 
@@ -811,21 +815,14 @@ def train():
 
     
         if i%args.i_print==0:
-            tqdm.write(f"[TRAIN] Iter: {i} Loss: {loss.item()}  PSNR: {psnr.item()}")
-        """
-            print(expname, i, psnr.numpy(), loss.numpy(), global_step.numpy())
-            print('iter time {:.05f}'.format(dt))
-
-            with tf.contrib.summary.record_summaries_every_n_global_steps(args.i_print):
-                tf.contrib.summary.scalar('loss', loss)
-                tf.contrib.summary.scalar('psnr', psnr)
-                tf.contrib.summary.histogram('tran', trans)
-                if args.N_importance > 0:
-                    tf.contrib.summary.scalar('psnr0', psnr0)
-
+            tqdm.write("[TRAIN] Iter: {} Loss: {}  PSNR: {}".format(i, loss.item(), psnr.item()))
+            writer.add_scalar('loss', loss, i)
+            writer.add_scalar('psnr', psnr, i)
+            writer.add_histogram('tran', trans, i)
+            if args.N_importance > 0:
+                writer.add_scalar('psnr0', psnr0, i)
 
             if i%args.i_img==0:
-
                 # Log a rendered validation view to Tensorboard
                 img_i=np.random.choice(i_val)
                 target = images[img_i]
@@ -836,23 +833,12 @@ def train():
 
                 psnr = mse2psnr(img2mse(rgb, target))
 
-                with tf.contrib.summary.record_summaries_every_n_global_steps(args.i_img):
+                writer.add_image('rgb', to8b(rgb.cpu().numpy()), i, dataformats='HWC')
+                writer.add_image('disp', disp.unsqueeze(0), i)
+                writer.add_image('acc', acc.unsqueeze(0), i)
 
-                    tf.contrib.summary.image('rgb', to8b(rgb)[tf.newaxis])
-                    tf.contrib.summary.image('disp', disp[tf.newaxis,...,tf.newaxis])
-                    tf.contrib.summary.image('acc', acc[tf.newaxis,...,tf.newaxis])
-
-                    tf.contrib.summary.scalar('psnr_holdout', psnr)
-                    tf.contrib.summary.image('rgb_holdout', target[tf.newaxis])
-
-
-                if args.N_importance > 0:
-
-                    with tf.contrib.summary.record_summaries_every_n_global_steps(args.i_img):
-                        tf.contrib.summary.image('rgb0', to8b(extras['rgb0'])[tf.newaxis])
-                        tf.contrib.summary.image('disp0', extras['disp0'][tf.newaxis,...,tf.newaxis])
-                        tf.contrib.summary.image('z_std', extras['z_std'][tf.newaxis,...,tf.newaxis])
-        """
+                writer.add_scalar('psnr_holdout', psnr, i)
+                writer.add_image('rgb_holdout', target, i, dataformats='HWC')
 
         global_step += 1
 

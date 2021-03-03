@@ -1,0 +1,16 @@
+expname = orange_nondc_lindisp_spherify_tbviz_nobatch
+basedir = ./logs
+datadir = /home/imedirat/datasets/color_orange
+dataset_type = llff
+
+factor = 1
+llffhold = 8
+
+N_rand = 1024
+N_samples = 64
+N_importance = 64
+
+use_viewdirs = True
+raw_noise_std = 1e0
+
+no_batching = True
