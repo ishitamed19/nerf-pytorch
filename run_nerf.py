@@ -13,6 +13,7 @@ from tqdm import tqdm, trange
 import matplotlib.pyplot as plt
 
 from run_nerf_helpers import *
+from utils_pdisco import *
 
 from load_llff import load_llff_data
 from load_deepvoxels import load_dv_data
@@ -312,6 +313,25 @@ def raw2outputs(raw, z_vals, rays_d, raw_noise_std=0, white_bkgd=False, pytest=F
 
     return rgb_map, disp_map, acc_map, weights, depth_map
 
+def eval_depth(pts, rays, network_fn, network_query_fn):
+    rays_o, rays_d = rays
+
+    viewdirs = rays_d
+    viewdirs = viewdirs / torch.norm(viewdirs, dim=-1, keepdim=True)
+    viewdirs = torch.reshape(viewdirs, [-1,3]).float()
+
+    # pts = [1, N_pts, 3]
+
+    raw = network_query_fn(pts, viewdirs, network_fn)
+    sigma = raw[...,3] # [1, N_pts]
+
+    if (torch.isnan(sigma).any() or torch.isinf(sigma).any()) and DEBUG:
+        print("! [Numerical Error] sigma contains nan or inf.")
+
+    return sigma
+
+    
+
 
 def render_rays(ray_batch,
                 network_fn,
@@ -578,6 +598,7 @@ def train():
             near = 0.
             far = 1.
         print('NEAR FAR', near, far)
+        DEPTH_RATIO = 0.00335
 
     elif args.dataset_type == 'blender':
         images, poses, render_poses, hwf, i_split = load_blender_data(args.datadir, args.half_res, args.testskip)
@@ -732,6 +753,13 @@ def train():
             target = images[img_i]
             pose = poses[img_i, :3,:4]
             depth_i = gt_depths[img_i]
+            depth_i = depth_i * DEPTH_RATIO # scale down the depth
+            pix_T_cam = pack_intrinsics(4.39947516e+02, 4.39947516e+02, 240, 320)
+            # distortion = 2.78915786e-02
+            xyz_i = depth2pointcloud(depth_i.unsqueeze(0).unsqueeze(0), pix_T_cam) #unproject to get pointcloud
+            origin_T_camX = eye_4x4(1)
+            origin_T_camX[:,:3,:4] = poses[img_i:img_i+1, :4,:4]
+            xyz_w_i = apply_4x4(origin_T_camX, xyz_i) # get the world coordinates (NeRF works in C2W)
 
             if N_rand is not None:
                 rays_o, rays_d = get_rays(H, W, focal, torch.Tensor(pose))  # (H, W, 3), (H, W, 3)
@@ -757,6 +785,8 @@ def train():
                 batch_rays = torch.stack([rays_o, rays_d], 0)  # (2, N_rand, 3)
                 target_s = target[select_coords[:, 0], select_coords[:, 1]]  # (N_rand, 3)
                 target_depth = depth_i[select_coords[:, 0], select_coords[:, 1]] # (N_rand, 1)
+                target_xyz = xyz_w_i[0, select_inds] # (1, N_rand, 3) 
+                target_xyz = target_xyz[target_depth > 0.] # Only select those points where depth is valid
 
         #####  Core optimization loop  #####
         rgb, disp, acc, depth, extras = render(H, W, focal, chunk=args.chunk, rays=batch_rays,
@@ -771,6 +801,19 @@ def train():
 
         depth_mask = torch.ones(target_depth[target_depth!=0.].shape)
         avg_depth_ratio = reduce_masked_mean(depth[target_depth!=0.]/target_depth[target_depth!=0.], depth_mask)
+
+        # st()
+        free_occ_xyz = fill_ray_single(target_xyz)
+        target_labels = torch.zeros((free_occ_xyz.shape[0], free_occ_xyz.shape[1],1), device='cuda')
+        target_labels[:, -1] = 1 # last poinnt is occupied
+        free_occ_xyz = torch.reshape(free_occ_xyz, (-1, 3)).unsqueeze(1)
+        target_labels = torch.reshape(target_labels, (-1, 1))
+        rays_to_pass = batch_rays[:, target_depth > 0., :] # (2, N, 3)
+        rays_to_pass =  rays_to_pass.repeat(1, 100, 1) # (2, N*samps, 3)
+        sigma = eval_depth(pts=free_occ_xyz, rays=rays_to_pass,  network_fn=render_kwargs_train['network_fn'], network_query_fn=render_kwargs_train['network_query_fn'])
+        occfreespace_loss = F.binary_cross_entropy_with_logits(sigma, target_labels)
+        loss += occfreespace_loss
+
 
         if 'rgb0' in extras:
             img_loss0 = img2mse(extras['rgb0'], target_s)
@@ -835,6 +878,8 @@ def train():
         if i%args.i_print==0:
             tqdm.write("[TRAIN] Iter: {} Loss: {}  PSNR: {}".format(i, loss.item(), psnr.item()))
             writer.add_scalar('loss', loss, i)
+            writer.add_scalar('img_loss', img_loss, i)
+            writer.add_scalar('occ_loss', occfreespace_loss, i)
             writer.add_scalar('psnr', psnr, i)
             writer.add_histogram('tran', trans, i)
             writer.add_scalar('avg_depth_ratio', avg_depth_ratio, i)

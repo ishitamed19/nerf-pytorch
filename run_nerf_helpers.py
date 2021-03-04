@@ -10,24 +10,6 @@ img2mse = lambda x, y : torch.mean((x - y) ** 2)
 mse2psnr = lambda x : -10. * torch.log(x) / torch.log(torch.Tensor([10.]))
 to8b = lambda x : (255*np.clip(x,0,1)).astype(np.uint8)
 
-EPS = 1e-6
-def reduce_masked_mean(x, mask, dim=None, keepdim=False):
-    # x and mask are the same shape
-    # returns shape-1
-    # axis can be a list of axes
-    # st()
-    assert(x.size() == mask.size())
-    prod = x*mask
-    if dim is None:
-        numer = torch.sum(prod)
-        denom = EPS+torch.sum(mask)
-    
-    else:
-        numer = torch.sum(prod, dim=dim, keepdim=keepdim)
-        denom = EPS+torch.sum(mask, dim=dim, keepdim=keepdim)
-        
-    mean = numer/denom
-    return mean
 
 class DenseLayer(nn.Linear):
     def __init__(self, in_dim: int, out_dim: int, activation: str = "relu", *args, **kwargs) -> None:

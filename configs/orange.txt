@@ -1,6 +1,6 @@
-expname = orange_nondc_lindisp_spherify_depthviz_nobatch
+expname = orange_nondc_lindisp_spherify_depthdebug
 basedir = ./logs
-datadir = /home/imedirat/datasets/color_orange
+datadir = /home/imedirat/datasets/color_orange_colmap
 dataset_type = llff
 
 factor = 1
